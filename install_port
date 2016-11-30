@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version=0.1
+version=0.2
 
 sources_file=/opt/local/etc/macports/sources.conf
 
@@ -140,7 +140,7 @@ install_ports() {
     i=0
     set --
     while [ $i -lt $num_port_opts ]; do
-        set -- "$@" $(get_key port_opts $i)
+        set -- "$@" "$(get_key port_opts $i)"
         i=$((i+1))
     done
     set -- "$@" -D "$portsdir" install
@@ -148,7 +148,7 @@ install_ports() {
     # get port names
     i=0
     while [ $i -lt $num_ports ]; do
-        set -- "$@" $(get_key ports $i)
+        set -- "$@" "$(get_key ports $i)"
         i=$((i+1))
     done
 
