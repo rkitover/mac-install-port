@@ -1,0 +1,196 @@
+#!/bin/sh
+
+version=0.1
+
+sources_file=/opt/local/etc/macports/sources.conf
+
+main() {
+    # parse options, passing through to port
+    num_port_opts=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help|--usage)
+                usage
+                quit 0
+                ;;
+            --version)
+                echo "install_port $version"
+                quit 0
+                ;;
+            -*)
+                set_key port_opts $num_port_opts "$1"
+                num_port_opts=$((num_port_opts+1))
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    if [ $# -lt 1 ]; then
+        usage
+        quit 1
+    fi
+
+    mktmp
+
+    install_ports "$@"
+
+    quit 0
+}
+
+mktmp() {
+    tmp="/tmp/install_port_$$"
+    mkdir "$tmp" || quit 1
+    chmod 755 "$tmp" 2>/dev/null
+    trap "quit 1" PIPE HUP INT QUIT ILL TRAP KILL BUS TERM
+}
+
+quit() {
+    restore_system_sources
+    [ -n "$tmp" -a -d "$tmp" ] && rm -rf "$tmp" 2>/dev/null
+    exit ${1:-0}
+}
+
+usage() {
+    cat <<'EOF'
+Usage: [32minstall_port [1;34m[[1;35mOPTIONS[1;34m][0m [1;35mPortfile or DIR[0m ...
+Install macports ports specified by Portfiles or port directories.
+
+Multiple Portfiles or directories can be passed.
+
+Any other [1;35mOPTIONS[0m will be passed through to the [1;35mport[0m command, except the ones listed below.
+
+This program requires [1;35msudo[0m.
+
+  [1m-h, --help, --usage[0m                Show this help screen and exit.
+  [1m--version[0m                          Show version information and exit.
+
+Examples:
+  [32minstall_port [1;35m./Portfile[0m                  # install [1;35mPortfile[0m in the current directory
+  [32minstall_port [1;35m./multimedia/ffmpeg[0m         # install port from directory (must contain [1;35mPortfile[0m)
+  [32minstall_port[0m [1m-v[0m [1;35m./multimedia/ffmpeg[0m      # likewise, but running [1;35mport[0m in verbose mode
+
+Project homepage and documentation: <[1;34mhttp://github.com/rkitover/mac-install-port[0m>
+EOF
+}
+
+install_ports() {
+    num_ports=$#
+
+    # prepare ports dir first
+    portsdir="$tmp/ports"
+    mkdir -p "$portsdir"
+    chmod 755 "$portsdir"
+
+    i=0
+    for port in "$@"; do
+        if [ -f "$port" ]; then
+            portdir=${port%/*}
+            portfile=$port
+
+            [ -z "$portdir" ] && portdir=$(pwd)
+        elif [ -f "$port/Portfile" ]; then
+            portdir=$port
+            portfile="$port/Portfile"
+        else
+            echo "'$port' does not look like a Portfile or port directory." >&2
+            quit 1
+        fi
+
+        port_name=$(sed -n 's/^[ 	]*name[ 	]*\([^ 	]*\).*$/\1/p' "$portfile")
+        port_main_category=$(sed -n 's/^[ 	]*categories[ 	]*\([^ 	]*\).*$/\1/p' "$portfile")
+
+        if [ -z "$port_name" -o -z "$port_main_category" ]; then
+            echo "Cannot parse '$portfile' as a portfile." >&2
+            quit 1
+        fi
+
+        set_key ports $i "$port_name"
+
+        # copy the port file to the right place
+        mkdir -p "$portsdir/$port_main_category"
+        chmod 755 "$portsdir/$port_main_category"
+
+        dest_port_dir="$portsdir/$port_main_category/$port_name"
+
+        mkdir -p "$dest_port_dir"
+        chmod 755 "$dest_port_dir"
+        cp "$portfile" "$dest_port_dir"
+        chmod 644 "$dest_port_dir/${portfile##*/}"
+
+        # copy the port's files/ if present as well
+        if [ -d "$portdir/files" ]; then
+            mkdir -p "$dest_port_dir/files"
+
+            (cd "$portdir/files"; tar cf - *) | (cd "$dest_port_dir/files"; tar xf -)
+
+            find "$dest_port_dir/files" -type d -exec chmod 755 {} \;
+            find "$dest_port_dir/files" -type f -exec chmod 644 {} \;
+        fi
+
+        i=$((i+1))
+    done
+
+    set_default_source "$portsdir"
+    portindex "$portsdir" >/dev/null
+
+    # get port options
+    i=0
+    set --
+    while [ $i -lt $num_port_opts ]; do
+        set -- "$@" $(get_key port_opts $i)
+        i=$((i+1))
+    done
+    set -- "$@" -D "$portsdir" install
+
+    # get port names
+    i=0
+    while [ $i -lt $num_ports ]; do
+        set -- "$@" $(get_key ports $i)
+        i=$((i+1))
+    done
+
+    # do install
+    sudo port "$@" || quit 1
+}
+
+set_default_source() {
+    _portsdir=$1
+
+    # backup sources file
+    cp "$sources_file" "$tmp/sources.conf.orig"
+
+    # add our temp ports dir as the first source (so it takes precedence)
+    echo "file://$_portsdir" > "$tmp/sources.conf"
+
+    # add all system sources after
+    sed -n 's/^[ 	]*\([^# 	].*\)$/\1/p' "$sources_file" >> "$tmp/sources.conf"
+
+    # restore system sources file on error and exit (in quit())
+    restore_system_sources=1
+
+    # install our version temporarily
+    sudo cp "$tmp/sources.conf" "$sources_file"
+    sudo chmod 644 "$sources_file"
+}
+
+restore_system_sources() {
+    if [ -n "$restore_system_sources" ]; then
+        sudo mv "$tmp/sources.conf.orig" "$sources_file"
+        sudo chmod 644 "$sources_file"
+        restore_system_sources=
+    fi
+}
+
+# emulate arrays
+set_key() {
+    eval "$1_$2=\"$3\""
+}
+
+get_key() {
+    eval "echo \"\${$1_$2}\""
+}
+
+main "$@"
