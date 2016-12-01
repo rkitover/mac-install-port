@@ -133,7 +133,7 @@ install_ports() {
     done
 
     set_default_source "$portsdir"
-    portindex "$portsdir" >/dev/null
+    portindex "$portsdir" >/dev/null || quit 1
 
     # get port options
     i=0
